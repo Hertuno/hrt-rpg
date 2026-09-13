@@ -1,5 +1,15 @@
-# On tag vX.Y.Z: zip mod, upload to Factorio portal, create GitHub Release.
-# Requires repo secret FACTORIO_MOD_API_KEY (ModPortal: Upload Mods).
+# On tag vX.Y.Z: zip → Factorio portal → GitHub Release → optional deploy to game server.
+#
+# Secrets (Settings → Secrets → Actions):
+#   FACTORIO_MOD_API_KEY   — required for portal upload
+#
+# Server deploy (pick ONE):
+#   A) Self-hosted runner on the Factorio host (recommended for LAN .55):
+#        - Install runner with label `hrt-factorio` (see README)
+#        - Repository variable ENABLE_SERVER_DEPLOY = true
+#   B) SSH from GitHub-hosted runner (only if host is reachable from the internet):
+#        - Secrets: FACTORIO_SSH_HOST, FACTORIO_SSH_USER, FACTORIO_SSH_KEY
+#        - Variable ENABLE_SSH_DEPLOY = true
 name: Release
 
 on:
@@ -13,6 +23,9 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.build.outputs.version }}
+      zip: ${{ steps.build.outputs.zip }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,7 +46,6 @@ jobs:
           STAGE="/tmp/${NAME}_${VER}"
           rm -rf "$STAGE"
           mkdir -p "$STAGE"
-          # Mod root only; keep portal helpers, drop VCS/CI from the zip
           rsync -a \
             --exclude '.git/' \
             --exclude '.github/' \
@@ -91,4 +103,96 @@ jobs:
           VER="${{ steps.build.outputs.version }}"
           gh release create "v${VER}" "$ZIP_NAME" \
             --title "hrt-rpg ${VER}" \
-            --notes "Release ${VER}. Portal: https://mods.factorio.com/mod/hrt-rpg — site: https://hrt-rpg.ru"
+            --notes "Release ${VER}. Portal: https://mods.factorio.com/mod/hrt-rpg — site: https://hrt-rpg.ru" \
+            --verify-tag
+
+  # Local deploy on the Factorio box (self-hosted runner). Skipped unless variable set.
+  deploy-local:
+    needs: release
+    if: ${{ vars.ENABLE_SERVER_DEPLOY == 'true' }}
+    runs-on: [self-hosted, linux, hrt-factorio]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install into Factorio mods + restart
+        env:
+          STACK: ${{ vars.FACTORIO_STACK_DIR }}
+        run: |
+          set -euo pipefail
+          STACK="${STACK:-/home/y/factorio}"
+          MODS="$STACK/data/mods"
+          STAGE="$STACK/tmp-hrt-rpg-ci"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          rsync -a \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '.gitignore' \
+            --exclude '*.zip' \
+            --exclude '.env' \
+            --exclude '.env.*' \
+            ./ "$STAGE/"
+          if command -v docker >/dev/null 2>&1; then
+            docker run --rm \
+              -v "$MODS:/mods" \
+              -v "$STAGE:/src:ro" \
+              alpine sh -c 'rm -rf /mods/hrt-rpg && cp -a /src /mods/hrt-rpg && chown -R 845:845 /mods/hrt-rpg'
+            cd "$STACK" && docker compose restart factorio
+          else
+            echo "docker not found on runner" >&2
+            exit 1
+          fi
+          python3 -c "import json; print('deployed', json.load(open('info.json'))['version'])"
+
+  # Optional: SSH deploy from GitHub-hosted runner (host must be on the public internet).
+  deploy-ssh:
+    needs: release
+    if: ${{ vars.ENABLE_SSH_DEPLOY == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        env:
+          SSH_KEY: ${{ secrets.FACTORIO_SSH_KEY }}
+          SSH_HOST: ${{ secrets.FACTORIO_SSH_HOST }}
+          SSH_USER: ${{ secrets.FACTORIO_SSH_USER }}
+          SSH_PORT: ${{ secrets.FACTORIO_SSH_PORT }}
+        run: |
+          set -euo pipefail
+          test -n "${SSH_KEY:-}" && test -n "${SSH_HOST:-}" && test -n "${SSH_USER:-}"
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          PORT="${SSH_PORT:-22}"
+          ssh-keyscan -p "$PORT" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+          echo "HOST=$SSH_HOST" >> "$GITHUB_ENV"
+          echo "USER=$SSH_USER" >> "$GITHUB_ENV"
+          echo "PORT=$PORT" >> "$GITHUB_ENV"
+
+      - name: Rsync mod and restart
+        env:
+          STACK: ${{ vars.FACTORIO_STACK_DIR }}
+        run: |
+          set -euo pipefail
+          STACK="${STACK:-/home/y/factorio}"
+          STAGE=$(mktemp -d)
+          rsync -a \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '.gitignore' \
+            --exclude '*.zip' \
+            --exclude '.env' \
+            --exclude '.env.*' \
+            ./ "$STAGE/"
+          rsync -az -e "ssh -i ~/.ssh/id_deploy -p $PORT" \
+            --delete "$STAGE/" "$USER@$HOST:/tmp/hrt-rpg-deploy/"
+          ssh -i ~/.ssh/id_deploy -p "$PORT" "$USER@$HOST" bash -s <<REMOTE
+          set -euo pipefail
+          STACK='$STACK'
+          docker run --rm -v "\$STACK/data/mods:/mods" -v /tmp/hrt-rpg-deploy:/src:ro alpine \
+            sh -c 'rm -rf /mods/hrt-rpg && cp -a /src /mods/hrt-rpg && chown -R 845:845 /mods/hrt-rpg'
+          cd "\$STACK" && docker compose restart factorio
+          REMOTE

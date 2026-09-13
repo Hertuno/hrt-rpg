@@ -3,18 +3,20 @@
 Мод для **Factorio 2.0 / Space Age**: ролевая прокачка поверх обычной фабрики.  
 Игрок выбирает класс, идёт по личному roadmap, берёт подкласс, участвует в мировых ивентах и крафтит классовое снаряжение mid-game.
 
-Версия: **0.2.5**
+Версия: **0.2.7**
 
 ## Статус (честно для игроков)
 
-**Уже есть:** классы, roadmap Early/Mid/Late, Mid+Late подклассы, ночные рейды / улей / прочие ивенты, локальный account level, классовый гир.
+**Уже есть:** классы, roadmap Early/Mid/Late, Mid+Late подклассы, ночные рейды / улей / прочие ивенты, локальный account level, классовый гир, soft-respawn (рандом в чанке спавна + неуязвимость).
 
 **Ещё в работе:** персистентный аккаунт между вайпами сейвов, free-батлпасс, автосезоны/ротация планет, полный paragon-цикл конца сезона, полировка баланса.
 
 ## Баланс
 
-Числовые ручки (ивенты, XP, киты, бонусы классов/подклассов, оружие/хил) — в [`scripts/balance.lua`](scripts/balance.lua).  
+Числовые ручки (ивенты, XP, киты, бонусы классов/подклассов, оружие/хил, respawn) — в [`scripts/balance.lua`](scripts/balance.lua).  
 Квесты (targets/xp/rewards) — в [`scripts/roadmap_trees.lua`](scripts/roadmap_trees.lua).
+
+`Balance.respawn`: `randomize` (телепорт в чанк спавна) и `invuln_seconds` (неуязвимость после смерти).
 
 ## Целевая модель сервера (сезоны)
 
@@ -122,12 +124,20 @@
 | Команда | Кто | Что делает |
 |---|---|---|
 | `/hrt-roadmap` | все | окно roadmap |
+| `/hrt-status [игрок]` | admin / RCON | статус класса/roadmap/character |
+| `/hrt-set-class [игрок] <class> [kit]` | admin / RCON | назначить класс |
+| `/hrt-set-subclass [игрок] <id> [tier]` | admin / RCON | назначить подкласс |
+| `/hrt-set-roadmap [игрок] <index>` | admin / RCON | прыжок по roadmap |
+| `/hrt-complete-quest [игрок]` | admin / RCON | завершить текущий квест |
+| `/hrt-reapply [игрок]` | admin / RCON | переложить бонусы |
 | `/hrt-account` | все | уровень аккаунта / XP |
 | `/hrt-paragon` | все | список наследий |
-| `/hrt-reset-class [игрок]` | admin | сброс класса/прогресса |
-| `/hrt-force-event [night\|hive]` | admin | форс ивента (или ночной рейд / улей) |
+| `/hrt-reset-class [игрок]` | admin / RCON | сброс класса/прогресса |
+| `/hrt-force-event [night\|hive]` | admin / RCON | форс ивента |
 | `/hrt-account set <игрок> <lvl>` | admin | выставить уровень аккаунта |
 | `/hrt-paragon give <игрок> <id>` | admin | выдать наследие (`survivor`/`scout`/`artisan`) |
+
+С хоста разработки: `factorio/scripts/hrt-rcon.sh 'hrt-status'` · `PLAYER=Name ./scripts/hrt-rcon-smoke.sh` (игрок online).
 
 ## Совместимость с другими модами пака
 
@@ -184,15 +194,40 @@ remote.call("hrt-rpg", "season_complete", player_name, "scout")
 
 ### Релизы через GitHub Actions
 
-1. В Settings → Secrets and variables → Actions добавьте секрет **`FACTORIO_MOD_API_KEY`** (ключ с factorio.com/profile, право **ModPortal: Upload Mods**).
-2. Поднимите `version` в `info.json`, закоммитьте и запушьте.
-3. Поставьте тег, совпадающий с версией, и запушьте его:
+1. Секрет **`FACTORIO_MOD_API_KEY`** (Upload Mods).
+2. Поднимите `version` в `info.json`, закоммитьте, запушьте тег `vX.Y.Z` (= версии).
+
+Workflow соберёт zip → портал → GitHub Release.
+
+#### Деплой на игровой сервер (.55)
+
+GitHub-hosted runner **не видит** LAN `192.168.0.55`. Варианты:
+
+**A) Self-hosted runner на `.55` (рекомендуется)**
+
+1. На https://github.com/Hertuno/hrt-rpg/settings/actions/runners → **New self-hosted runner** (Linux x64).
+2. На сервере от пользователя `y` (с доступом к docker):
 
 ```bash
-git tag v0.2.5
-git push origin v0.2.5
+mkdir -p ~/actions-runner && cd ~/actions-runner
+# curl/tar по инструкции со страницы New runner
+./config.sh --url https://github.com/Hertuno/hrt-rpg --token <TOKEN_С_СТРАНИЦЫ> \
+  --name factorio-55 --labels hrt-factorio --work _work
+sudo ./svc.sh install
+sudo ./svc.sh start
 ```
 
-Workflow `.github/workflows/release.yml` соберёт `hrt-rpg_X.Y.Z.zip`, зальёт на портал и создаст GitHub Release с этим zip.
+3. Settings → Secrets and variables → Actions → **Variables** (не Secrets):
+   - `ENABLE_SERVER_DEPLOY` = `true`
+   - опционально `FACTORIO_STACK_DIR` = `/home/y/factorio`
+
+После тега job **deploy-local** скопирует мод и сделает `docker compose restart factorio`.
+
+**B) SSH с облака** — только если SSH доступен с интернета:
+
+- Secrets: `FACTORIO_SSH_HOST`, `FACTORIO_SSH_USER`, `FACTORIO_SSH_KEY` (private key), опционально `FACTORIO_SSH_PORT`
+- Variable: `ENABLE_SSH_DEPLOY` = `true`
+
+Локально по-прежнему: `factorio/scripts/hrt-release.sh`.
 
 Рабочая копия в monorepo: `factorio/mods/hrt-rpg/` в cursor_home; GitHub — отдельный репозиторий для `source_url` и CI.
