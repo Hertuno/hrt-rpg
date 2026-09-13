@@ -1,0 +1,1 @@
+-- Reuse vanilla small grid; no custom equipment entities required for v0.1.

@@ -1,0 +1,1 @@
+-- Prefer vanilla styles; placeholder for future custom GUI styles.

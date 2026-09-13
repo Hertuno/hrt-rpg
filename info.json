@@ -1,0 +1,17 @@
+{
+  "name": "hrt-rpg",
+  "version": "0.2.5",
+  "title": "HRT RPG (classes, roadmap, events)",
+  "author": "hrt",
+  "factorio_version": "2.0",
+  "dependencies": [
+    "base >= 2.0.0",
+    "? space-age",
+    "? flib",
+    "? bobclasses",
+    "? boblibrary",
+    "? RPGsystem"
+  ],
+  "description": "EARLY BUILD (WIP). Classes, roadmaps, subclasses, events work. Cross-wipe account, battle pass, auto seasons still in progress. https://hrt-rpg.ru",
+  "homepage": "https://hrt-rpg.ru"
+}

@@ -1,0 +1,19 @@
+# Secrets / local env
+.env
+.env.*
+!.env.example
+
+# Packaged releases (build artifacts)
+*.zip
+
+# Editor / OS junk
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+*.bak
+
+# Lua / tooling caches (if any)
+.luarc.json.bak

@@ -1,0 +1,94 @@
+# On tag vX.Y.Z: zip mod, upload to Factorio portal, create GitHub Release.
+# Requires repo secret FACTORIO_MOD_API_KEY (ModPortal: Upload Mods).
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version and build zip
+        id: build
+        run: |
+          set -euo pipefail
+          NAME=$(python3 -c "import json; print(json.load(open('info.json'))['name'])")
+          VER=$(python3 -c "import json; print(json.load(open('info.json'))['version'])")
+          TAG="${GITHUB_REF_NAME}"
+          EXPECTED="v${VER}"
+          if [[ "$TAG" != "$EXPECTED" ]]; then
+            echo "Tag '$TAG' must match info.json version as '$EXPECTED'" >&2
+            exit 1
+          fi
+          ZIP_NAME="${NAME}_${VER}.zip"
+          STAGE="/tmp/${NAME}_${VER}"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          # Mod root only; keep portal helpers, drop VCS/CI from the zip
+          rsync -a \
+            --exclude '.git/' \
+            --exclude '.github/' \
+            --exclude '.gitignore' \
+            --exclude '*.zip' \
+            --exclude '.env' \
+            --exclude '.env.*' \
+            ./ "$STAGE/"
+          (cd /tmp && zip -qr "$GITHUB_WORKSPACE/$ZIP_NAME" "${NAME}_${VER}")
+          echo "zip=$ZIP_NAME" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          ls -lh "$ZIP_NAME"
+
+      - name: Upload to Factorio mod portal
+        env:
+          FACTORIO_MOD_API_KEY: ${{ secrets.FACTORIO_MOD_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${FACTORIO_MOD_API_KEY:-}" ]]; then
+            echo "Missing secret FACTORIO_MOD_API_KEY — add it in repo Settings → Secrets" >&2
+            exit 1
+          fi
+          NAME="${{ steps.build.outputs.name }}"
+          ZIP_NAME="${{ steps.build.outputs.zip }}"
+          init=$(curl -sS -X POST \
+            "https://mods.factorio.com/api/v2/mods/releases/init_upload" \
+            -H "Authorization: Bearer ${FACTORIO_MOD_API_KEY}" \
+            -F "mod=${NAME}")
+          upload_url=$(printf '%s' "$init" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          url = d.get('upload_url') or ''
+          if not url:
+              print(d, file=sys.stderr)
+              raise SystemExit(1)
+          print(url)
+          ")
+          resp=$(curl -sS -X POST "$upload_url" -F "file=@${ZIP_NAME}")
+          printf '%s' "$resp" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          if not d.get('success'):
+              print(d, file=sys.stderr)
+              raise SystemExit(1)
+          print('Portal upload OK')
+          "
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ZIP_NAME="${{ steps.build.outputs.zip }}"
+          VER="${{ steps.build.outputs.version }}"
+          gh release create "v${VER}" "$ZIP_NAME" \
+            --title "hrt-rpg ${VER}" \
+            --notes "Release ${VER}. Portal: https://mods.factorio.com/mod/hrt-rpg — site: https://hrt-rpg.ru"
